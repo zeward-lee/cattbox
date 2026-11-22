@@ -707,17 +707,15 @@ class _LocalNetworkPermissionItemState
   Widget build(BuildContext context) {
     if (!_supported) return const SizedBox.shrink();
     return ListItem(
-      title: Text(appLocalizations.localNetworkPermission),
-      subtitle: Text(appLocalizations.localNetworkPermissionDesc),
       leading: const AppIcon(Icons.lan_outlined),
-      trailing: Icon(
+      title: Text(appLocalizations.localNetworkPermission),
+      // 副标题只放状态，完整说明在点击后的对话框里（_showSettingsHint）。
+      subtitle: Text(
         _granted
-            ? Icons.check_circle_outline
-            : Icons.warning_amber_rounded,
-        color: _granted
-            ? context.colorScheme.primary
-            : context.colorScheme.error,
+            ? appLocalizations.localNetworkPermissionGranted
+            : appLocalizations.localNetworkPermissionDenied,
       ),
+      trailing: const AppIcon(Icons.chevron_right),
       onTap: _onTap,
     );
   }
