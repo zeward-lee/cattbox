@@ -129,51 +129,12 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		// A bare `type: trojan` whose password carries the #fastup marker is the
-		// old spelling of the Fastup variant, so report the vendor identity and
-		// not Trojan: the UI maps it to FastUP. The node normally runs inside an
-		// h2mux session; the adapter forces sing-mux with the protocol the
-		// vendor client uses unless the node opts out (see fastupMuxOptedOut).
-		if outbound.IsFastupTrojanPassword(trojanOption.Password) {
-			trojanAdapter.SetAdapterType(C.Fastup)
-			if fastupMuxOptedOut(mapping) {
-				proxy = trojanAdapter
-			} else {
-				proxy, err = outbound.NewSingMux(outbound.SingMuxOption{
-					Enabled:  true,
-					Protocol: "h2mux",
-				}, trojanAdapter)
-				forcedFastupMux = err == nil
-			}
-		} else {
-			proxy = trojanAdapter
-		}
-	case "fastup":
-		// `type: fastup` is the vendor's own name for the trojan wire: the
-		// #fastup password derivation plus a forced h2mux session. The marker
-		// may be omitted because the type implies it; the plain `trojan` case
-		// above keeps accepting the old `password: ...#fastup` spelling. The
-		// mux can be opted out per node (see fastupMuxOptedOut), the password
-		// derivation stays either way because it belongs to the wire, not mux.
-		trojanOption := &outbound.TrojanOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, trojanOption)
+		// old spelling of the Fastup variant: the hook reports the vendor
+		// identity and forces the vendor's h2mux session unless the node opts
+		// out (see fastupMuxOptedOut).
+		proxy, forcedFastupMux, err = applyFastupTrojanHook(trojanAdapter, trojanOption.Password, mapping)
 		if err != nil {
 			break
-		}
-		trojanOption.Password = outbound.EnsureFastupPasswordMarker(trojanOption.Password)
-		var fastupAdapter *outbound.Trojan
-		fastupAdapter, err = outbound.NewTrojan(*trojanOption)
-		if err != nil {
-			break
-		}
-		fastupAdapter.SetAdapterType(C.Fastup)
-		if fastupMuxOptedOut(mapping) {
-			proxy = fastupAdapter
-		} else {
-			proxy, err = outbound.NewSingMux(outbound.SingMuxOption{
-				Enabled:  true,
-				Protocol: "h2mux",
-			}, fastupAdapter)
-			forcedFastupMux = err == nil
 		}
 	case "hysteria":
 		hyOption := &outbound.HysteriaOption{BasicOption: basicOption}
@@ -217,13 +178,6 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewGostRelay(*relayOption)
-	case "x365":
-		x365Option := &outbound.X365Option{BasicOption: basicOption}
-		err = decoder.Decode(mapping, x365Option)
-		if err != nil {
-			break
-		}
-		proxy, err = outbound.NewX365(*x365Option)
 	case "direct":
 		directOption := &outbound.DirectOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, directOption)
@@ -284,49 +238,6 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			anytlsAdapter.SetAdapterType(C.Shanlian)
 		}
 		proxy = anytlsAdapter
-	case "shanlian":
-		// `type: shanlian` is the vendor's own name for the anytls wire with the
-		// Shanlian direct-authentication password. The "#sl" marker may be
-		// omitted because the type implies it; the plain `anytls` case above
-		// keeps accepting the old `password: ...#SL` spelling. The type also
-		// selects the vendor bare-32-hex credential scheme, so a shanlian node
-		// published with a 32 hex password keeps working after the credential
-		// derivation became an explicit opt-in. A bare `type: anytls` node is
-		// only switched when it carries `password-mode: raw16` itself.
-		anytlsOption := &outbound.AnyTLSOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, anytlsOption)
-		if err != nil {
-			break
-		}
-		anytlsOption.ApplyShanlianTypeDefaults()
-		var shanlianAdapter *outbound.AnyTLS
-		shanlianAdapter, err = outbound.NewAnyTLS(*anytlsOption)
-		if err != nil {
-			break
-		}
-		shanlianAdapter.SetAdapterType(C.Shanlian)
-		proxy = shanlianAdapter
-	case "miu":
-		miuOption := &outbound.MiuOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, miuOption)
-		if err != nil {
-			break
-		}
-		proxy, err = outbound.NewMiu(*miuOption)
-	case "oppa":
-		oppaOption := &outbound.OppaOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, oppaOption)
-		if err != nil {
-			break
-		}
-		proxy, err = outbound.NewOppa(*oppaOption)
-	case "sntp-eclipse":
-		sntpEclipseOption := &outbound.SNTPEclipseOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, sntpEclipseOption)
-		if err != nil {
-			break
-		}
-		proxy, err = outbound.NewSNTPEclipse(*sntpEclipseOption)
 	case "sudoku":
 		sudokuOption := &outbound.SudokuOption{BasicOption: basicOption}
 		err = decoder.Decode(mapping, sudokuOption)
@@ -376,27 +287,30 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 			break
 		}
 		proxy, err = outbound.NewEasyTier(*easyTierOption)
-	case "ninja":
-		ninjaOption := &outbound.NinjaOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, ninjaOption)
-		if err != nil {
-			break
+	default:
+		// Vendor-private types live in private_parsers.go so adding one does
+		// not touch this upstream switch.
+		factory, private := privateProxyFactories[proxyType]
+		if !private {
+			return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 		}
-		proxy, err = outbound.NewNinja(*ninjaOption)
-	case "xhttp":
-		xhttpOption := &outbound.XHttpOption{BasicOption: basicOption}
-		err = decoder.Decode(mapping, xhttpOption)
-		if err != nil {
-			break
+		name, _ := mapping["name"].(string)
+		privateProxy, factoryErr := factory(name, mapping, &basicOption)
+		if factoryErr != nil {
+			return nil, factoryErr
 		}
-		var xhttpAdapter *outbound.XHttp
-		xhttpAdapter, err = outbound.NewXHttp(*xhttpOption)
-		if err == nil && xhttpAdapter.IsDynamic() {
+		proxy = privateProxy
+		// Fastup is the only private factory that wraps its adapter in the
+		// vendor's h2mux session; record it so the `smux:` block below does not
+		// wrap the node a second time.
+		if _, fastupMuxed := proxy.(*outbound.SingMux); fastupMuxed {
+			forcedFastupMux = true
+		}
+		// A dynamic xhttp node resolves its real server at first use, so keep
+		// its adapter for the URL-test wrapper below.
+		if xhttpAdapter, isXHttp := proxy.(*outbound.XHttp); isXHttp && xhttpAdapter.IsDynamic() {
 			dynamicXhttp = xhttpAdapter
 		}
-		proxy = xhttpAdapter
-	default:
-		return nil, fmt.Errorf("unsupport proxy type: %s", proxyType)
 	}
 
 	if err != nil {
