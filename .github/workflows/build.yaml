@@ -16,7 +16,12 @@ on:
       - 'v*'
 
 env:
-  IS_STABLE: ${{ !contains(github.ref, '-') }}
+  # A dispatch from a branch must still produce a STABLE build: the branch name
+  # contains '-' (feat/smart-core), which made IS_STABLE false and baked
+  # APP_ENV=pre into the app. isPreRelease then stayed true, so the in-app
+  # updater treated an equal remote tag as an update and the NEW badge never
+  # cleared. Tag pushes keep the old rule ('-' in the tag = prerelease).
+  IS_STABLE: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref, '-') }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SENTRY_BACKEND: none
 
