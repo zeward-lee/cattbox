@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Protocol smoke gates for the feebox-bett core.
+"""Protocol smoke gates for the cattbox core.
 
 The migration moves twelve private protocol variants into this tree. Each one is
 covered at a different level, and the level is the point of this script:

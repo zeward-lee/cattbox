@@ -4,7 +4,7 @@
 
 构建产物见 Releases。
 
-本项目：[zeward-lee/feebox-bett](https://github.com/zeward-lee/feebox-bett)
+本项目：[zeward-lee/cattbox](https://github.com/zeward-lee/cattbox)
 
 上游代码基线：appshubcc/Bettbox（仅作来源说明；发布包与升级源均以本项目为准）
 
@@ -19,6 +19,7 @@
 
 ## 当前版本
 
+- **1.19.14**（2026-11-23）：仓库更名为 `cattbox`，清理全部旧仓库标识；升级链路与私有协议不变。
 - **1.19.13**（2026-11-23）：合并上游 Bettbox v1.19.10（24 个提交），新增每订阅「直连更新 / 跳过证书验证」、连接页一键建规则、批量导入节点、测速卡死修复、FakeIP 走 TUN 等。
 
 ## 构建

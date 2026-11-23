@@ -1,6 +1,6 @@
 name: build-custom
 
-# feebox-bett private build lane (repository is permanently public since
+# cattbox private build lane (repository is permanently public since
 # 2026-11-16). The upstream-managed .github/workflows/build.yaml is kept
 # byte-identical to the upstream tag and disabled with `if: ${{ false }}`
 # so upstream syncs never conflict; every private build lives here.
@@ -323,7 +323,7 @@ jobs:
             echo "signer sha256=$fp expected=$EXPECTED_CERT_SHA256"
             sha256sum "$f"
             if [ "$fp" != "$EXPECTED_CERT_SHA256" ]; then
-              echo "::error::$f is NOT signed with the feebox release cert (debug fallback?)"
+              echo "::error::$f is NOT signed with the cattbox release cert (debug fallback?)"
               exit 1
             fi
           done

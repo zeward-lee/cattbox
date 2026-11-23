@@ -114,7 +114,7 @@ void main(List<String> arguments) async {
     'ARCH': arch == 'arm64' ? 'arm64' : 'x64',
     'PUBLISHER_URL':
         makeConfig['publisher_url'] ??
-        'https://github.com/zeward-lee/feebox-bett',
+        'https://github.com/zeward-lee/cattbox',
     'CREATE_DESKTOP_ICON': true,
     'LAUNCH_AT_STARTUP': true,
     'INSTALL_DIR_NAME':
