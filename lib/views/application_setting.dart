@@ -636,8 +636,11 @@ class LocalNetworkPermissionItem extends ConsumerStatefulWidget {
 class _LocalNetworkPermissionItemState
     extends ConsumerState<LocalNetworkPermissionItem>
     with WidgetsBindingObserver {
-  bool _supported = false;
-  bool _granted = false;
+  // null = 状态未知（首帧/查询未返回），此时不渲染，避免行出现后闪一下消失。
+  bool? _supported;
+  bool? _granted;
+  // 申请进行中的防重入标记（不参与 UI）
+  bool _requesting = false;
 
   @override
   void initState() {
@@ -693,27 +696,29 @@ class _LocalNetworkPermissionItemState
     if (goSettings == true) await app.openAppSettings();
   }
 
-  // 单向语义：应用内不能撤销，只能跳系统设置；开关不做乐观更新，由权限查询结果驱动。
+  // 单向语义：该行只在未授权时显示，关闭方向不可达；撤销只能在系统设置里做。
+  // 开关不做乐观更新，由权限查询结果驱动。
   Future<void> _onChanged(bool value) async {
-    if (value == _granted) return;
-    if (value) {
+    if (!value || _requesting) return;
+    _requesting = true;
+    try {
       // 未授权 -> 发起申请；失败（含永久拒绝）时引导用户去系统设置。
       final requested = await LocalNetworkPermission.request(force: true);
       if (!requested && mounted) await _showSettingsHint();
-      return;
+    } finally {
+      _requesting = false;
     }
-    // 已授权 -> 应用内无法撤销，说明后引导到系统应用详情页；
-    // 不改 _granted，开关会自然停在 ON。
-    await _showSettingsHint();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (!_supported) return const SizedBox.shrink();
+    // 仅"已确认支持且未授权"才渲染；状态未知或已授权时整行不出现。
+    if (_supported != true || _granted == true) return const SizedBox.shrink();
     return ListItem.switchItem(
       title: Text(appLocalizations.localNetworkPermission),
       subtitle: Text(appLocalizations.localNetworkPermissionDesc),
-      delegate: SwitchDelegate(value: _granted, onChanged: _onChanged),
+      // 该行只在未授权时渲染，开关恒为 OFF，点击即发起申请。
+      delegate: SwitchDelegate(value: false, onChanged: _onChanged),
     );
   }
 }
