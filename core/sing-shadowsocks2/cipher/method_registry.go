@@ -24,10 +24,11 @@ func CreateMethod(methodName string, options MethodOptions) (Method, error) {
 		return nil, E.New("unknown method: ", methodName)
 	}
 
-	// A ViewTurbo node carries the real token in its password marker; the
-	// wrapped method runs with the placeholder password because the server
-	// derives the key from the token block of the forged header instead.
-	token, isViewTurbo := ParseViewTurboPassword(options.Password)
+	// A ViewTurbo node is recognized by the "#VT" marker, but the marked
+	// password is not the real token: the relay expects a fresh one-shot token
+	// in each connection's header, minted by viewTurboConn. The wrapped method
+	// therefore runs with the placeholder password.
+	_, isViewTurbo := ParseViewTurboPassword(options.Password)
 	if isViewTurbo {
 		options.Password = viewTurboPlaceholderPassword
 		options.Key = nil
@@ -38,7 +39,7 @@ func CreateMethod(methodName string, options MethodOptions) (Method, error) {
 		return nil, err
 	}
 	if isViewTurbo {
-		return &viewTurboMethod{origMethod: method, token: token}, nil
+		return &viewTurboMethod{origMethod: method}, nil
 	}
 	return method, nil
 }

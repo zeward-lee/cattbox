@@ -6,6 +6,7 @@ import (
 	"io"
 	"math/rand"
 	"net"
+	"regexp"
 	"testing"
 	"time"
 )
@@ -34,15 +35,13 @@ type dummyAddr string
 func (a dummyAddr) Network() string { return string(a) }
 func (a dummyAddr) String() string  { return string(a) }
 
+func isASCIILetter(b byte) bool {
+	return b >= 'A' && b <= 'Z' || b >= 'a' && b <= 'z'
+}
+
 func TestViewTurboFirstWriteWire(t *testing.T) {
 	underlying := &memoryConn{}
-	conn := &viewTurboConn{
-		Conn:       underlying,
-		token:      "test-token",
-		firstWrite: true,
-		firstRead:  true,
-		random:     rand.New(rand.NewSource(1)),
-	}
+	conn := newViewTurboConn(underlying).(*viewTurboConn)
 	input := make([]byte, 100)
 	for i := range input {
 		input[i] = byte(i)
@@ -58,7 +57,7 @@ func TestViewTurboFirstWriteWire(t *testing.T) {
 		t.Fatalf("fake header length = %d; want %d..%d", headerEnd, viewTurboMinHeaderLength, viewTurboMaxHeaderLength)
 	}
 	for i, b := range wire[:headerEnd] {
-		if b < 'A' || b > 'Z' && b < 'a' || b > 'z' {
+		if !isASCIILetter(b) {
 			t.Fatalf("fake header byte %d = %#x; want ASCII letter", i, b)
 		}
 	}
@@ -67,9 +66,14 @@ func TestViewTurboFirstWriteWire(t *testing.T) {
 	if len(wire) != offset+60+len(input) {
 		t.Fatalf("wire length = %d; want %d", len(wire), offset+60+len(input))
 	}
+	// The token is minted per connection, so the expected block is derived
+	// from the connection itself rather than a hardcoded literal.
 	tokenBlock := wire[offset : offset+60]
-	wantToken := []byte("test-token")
-	for i, want := range wantToken {
+	token := []byte(conn.token)
+	if len(token) >= viewTurboTokenBlock {
+		t.Fatalf("token length = %d; want a 36 byte uuid", len(token))
+	}
+	for i, want := range token {
 		if i == 1 {
 			want = ^want
 		}
@@ -77,8 +81,13 @@ func TestViewTurboFirstWriteWire(t *testing.T) {
 			t.Fatalf("token byte %d = %#x; want %#x", i, tokenBlock[i], want)
 		}
 	}
-	if tokenBlock[len(wantToken)] != ':' {
-		t.Fatalf("token terminator = %#x; want ':'", tokenBlock[len(wantToken)])
+	if tokenBlock[len(token)] != ':' {
+		t.Fatalf("token terminator = %#x; want ':'", tokenBlock[len(token)])
+	}
+	for i := len(token) + 1; i < viewTurboTokenBlock; i++ {
+		if !isASCIILetter(tokenBlock[i]) {
+			t.Fatalf("token padding byte %d = %#x; want ASCII letter", i, tokenBlock[i])
+		}
 	}
 
 	offset += 60
@@ -89,6 +98,73 @@ func TestViewTurboFirstWriteWire(t *testing.T) {
 	}
 	if !bytes.Equal(wire[offset+32:], input[32:]) {
 		t.Fatalf("payload remainder changed: got %x want %x", wire[offset+32:], input[32:])
+	}
+}
+
+// TestViewTurboTokenIsFreshPerConnection pins the anti-replay contract: the
+// relay accepts a token once, so every connection must mint a new RFC 4122 v4
+// uuid (36 characters) and two connections must never share one.
+func TestViewTurboTokenIsFreshPerConnection(t *testing.T) {
+	uuidV4 := regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	seen := make(map[string]bool, 64)
+	for i := 0; i < 64; i++ {
+		conn := newViewTurboConn(&memoryConn{}).(*viewTurboConn)
+		if len(conn.token) != 36 {
+			t.Fatalf("token %q length = %d; want 36", conn.token, len(conn.token))
+		}
+		if !uuidV4.MatchString(conn.token) {
+			t.Fatalf("token %q is not a canonical UUIDv4", conn.token)
+		}
+		if seen[conn.token] {
+			t.Fatalf("token %q reused on connection %d", conn.token, i)
+		}
+		seen[conn.token] = true
+	}
+}
+
+// TestViewTurboAuthBlockShape pins the 60 byte auth block layout: token copied
+// verbatim, ':' at len(token), byte 1 inverted, and the tail filled with ASCII
+// letters (never NUL, which is not what the vendor build sends).
+func TestViewTurboAuthBlockShape(t *testing.T) {
+	underlying := &memoryConn{}
+	conn := newViewTurboConn(underlying).(*viewTurboConn)
+	if _, err := conn.Write(make([]byte, 64)); err != nil {
+		t.Fatal(err)
+	}
+	wire := underlying.writes.Bytes()
+	headerEnd := bytes.Index(wire, []byte("\r\n\r\n"))
+	if headerEnd < 0 {
+		t.Fatal("no forged header terminator on the wire")
+	}
+	offset := headerEnd + 4
+	if len(wire) < offset+viewTurboTokenBlock {
+		t.Fatalf("wire length = %d; want at least %d", len(wire), offset+viewTurboTokenBlock)
+	}
+	block := wire[offset : offset+viewTurboTokenBlock]
+	token := []byte(conn.token)
+
+	if block[0] != token[0] {
+		t.Fatalf("block[0] = %#x; want %#x", block[0], token[0])
+	}
+	if block[1] != ^token[1] {
+		t.Fatalf("block[1] = %#x; want %#x (token[1] inverted)", block[1], ^token[1])
+	}
+	if block[len(token)] != ':' {
+		t.Fatalf("block[%d] = %#x; want ':'", len(token), block[len(token)])
+	}
+	for i := 0; i < len(token); i++ {
+		want := token[i]
+		if i == 1 {
+			want = ^want
+		}
+		if block[i] != want {
+			t.Fatalf("block[%d] = %#x; want %#x", i, block[i], want)
+		}
+	}
+	for i := len(token) + 1; i < viewTurboTokenBlock; i++ {
+		if !isASCIILetter(block[i]) {
+			t.Fatalf("block[%d] = %#x; want ASCII letter padding", i, block[i])
+		}
 	}
 }
 
