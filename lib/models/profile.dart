@@ -88,8 +88,9 @@ abstract class Profile with _$Profile {
     @Default(false) bool managed,
     @Default(false) bool managedStyleApplied,
     String? ageSecretKey,
+    @Default(false) bool skipCertVerify,
+    @Default(false) bool directUpdate,
     String? userAgent,
-    @Default(true) bool useProxy,
     @JsonKey(name: 'group-switches')
     @Default({})
     Map<String, bool> groupSwitches,
@@ -344,8 +345,9 @@ extension ProfileExtension on Profile {
       final source = await request.fetchProfileSource(
         url,
         downloadPath,
+        direct: directUpdate,
+        skipCertVerify: skipCertVerify,
         userAgent: userAgent,
-        useProxy: useProxy,
       );
       final headers = source.headers;
       final disposition = headers?['content-disposition']?.firstOrNull;

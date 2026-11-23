@@ -39,7 +39,6 @@ class Request {
 
   late final Dio _dio;
   late final Dio _clashDio;
-  late final Dio _directDio;
   String? userAgent;
 
   Request() {
@@ -75,30 +74,9 @@ class Request {
       createHttpClient: () {
         final client = HttpClient();
         client.autoUncompress = false;
-        client.badCertificateCallback = (_, _, _) => true;
         client.findProxy = (Uri uri) {
           client.userAgent = globalState.ua;
           return BettboxHttpOverrides.handleFindProxy(uri);
-        };
-        return client;
-      },
-    );
-    // 订阅直连通道：用于单条订阅关闭「更新时使用代理」的场景。
-    // 超时与 _clashDio 保持一致，findProxy 恒为 DIRECT，不经过内核代理。
-    _directDio = Dio(
-      BaseOptions(
-        connectTimeout: const Duration(seconds: 30),
-        receiveTimeout: const Duration(minutes: 5),
-        sendTimeout: const Duration(seconds: 30),
-      ),
-    );
-    _directDio.httpClientAdapter = IOHttpClientAdapter(
-      createHttpClient: () {
-        final client = HttpClient();
-        client.autoUncompress = false;
-        client.findProxy = (Uri uri) {
-          client.userAgent = globalState.ua;
-          return 'DIRECT';
         };
         return client;
       },
@@ -296,8 +274,9 @@ class Request {
   Future<({String path, Headers? headers, bool remote})> fetchProfileSource(
     String url,
     String downloadPath, {
+    bool direct = false,
+    bool skipCertVerify = false,
     String? userAgent,
-    bool useProxy = true,
   }) async {
     if (url.isFileUrl) {
       final local = await _localFileForUrl(url);
@@ -309,45 +288,22 @@ class Request {
       );
     }
     final (requestUrl, headers) = _authorizedRequest(url);
-    final customUa = userAgent?.trim();
-    if (customUa != null && customUa.isNotEmpty) {
-      headers[HttpHeaders.userAgentHeader] = customUa;
-    }
-    final dio = useProxy ? _clashDio : _directDio;
-    try {
-      final response = await _withPlainEncodingRetry(
-        headers,
-        (requestHeaders) => dio.download(
-          requestUrl,
-          downloadPath,
-          options: Options(headers: requestHeaders),
-        ),
-      );
-      return (path: downloadPath, headers: response.headers, remote: true);
-    } on DioException catch (e) {
-      if (e.error is! HandshakeException) rethrow;
-      commonPrint.log('TLS verification failed, retrying through core: $e');
-      final proxy = BettboxHttpOverrides.handleFindProxy(Uri.parse(requestUrl));
-      final responseHeaders = await clashCore.downloadProfile(
-        url: requestUrl,
-        output: downloadPath,
-        headers: {
-          for (final MapEntry(:key, :value) in headers.entries)
-            key: value.toString(),
-          HttpHeaders.userAgentHeader:
-              customUa == null || customUa.isEmpty ? globalState.ua : customUa,
-        },
-        proxy:
-            useProxy && proxy.startsWith('PROXY ')
-                ? proxy.substring(6)
-                : null,
-      );
-      return (
-        path: downloadPath,
-        headers: Headers.fromMap(responseHeaders),
-        remote: true,
-      );
-    }
+    final responseHeaders = await clashCore.downloadProfile(
+      url: requestUrl,
+      output: downloadPath,
+      headers: {
+        for (final MapEntry(:key, :value) in headers.entries)
+          key: value.toString(),
+        HttpHeaders.userAgentHeader: userAgent ?? globalState.ua,
+      },
+      direct: direct || globalState.appState.runTime == null,
+      skipCertVerify: skipCertVerify,
+    );
+    return (
+      path: downloadPath,
+      headers: Headers.fromMap(responseHeaders),
+      remote: true,
+    );
   }
 
   Future<Response<dynamic>> _getResponseForUrl(
@@ -466,7 +422,7 @@ class Request {
         }
       }
     } catch (e) {
-      commonPrint.warn('Check update failed: ${e.formatErrorLog}');
+      commonPrint.warn('Check failed: ${e.formatErrorLog}', module: 'Update');
     }
     return null;
   }
