@@ -693,30 +693,27 @@ class _LocalNetworkPermissionItemState
     if (goSettings == true) await app.openAppSettings();
   }
 
-  Future<void> _onTap() async {
-    if (_granted) {
-      // 已授权时直接打开系统应用详情页，方便用户随时收回权限。
-      await app.openAppSettings();
+  // 单向语义：应用内不能撤销，只能跳系统设置；开关不做乐观更新，由权限查询结果驱动。
+  Future<void> _onChanged(bool value) async {
+    if (value == _granted) return;
+    if (value) {
+      // 未授权 -> 发起申请；失败（含永久拒绝）时引导用户去系统设置。
+      final requested = await LocalNetworkPermission.request(force: true);
+      if (!requested && mounted) await _showSettingsHint();
       return;
     }
-    final requested = await LocalNetworkPermission.request(force: true);
-    if (!requested && mounted) await _showSettingsHint();
+    // 已授权 -> 应用内无法撤销，说明后引导到系统应用详情页；
+    // 不改 _granted，开关会自然停在 ON。
+    await _showSettingsHint();
   }
 
   @override
   Widget build(BuildContext context) {
     if (!_supported) return const SizedBox.shrink();
-    return ListItem(
-      leading: const AppIcon(Icons.lan_outlined),
+    return ListItem.switchItem(
       title: Text(appLocalizations.localNetworkPermission),
-      // 副标题只放状态，完整说明在点击后的对话框里（_showSettingsHint）。
-      subtitle: Text(
-        _granted
-            ? appLocalizations.localNetworkPermissionGranted
-            : appLocalizations.localNetworkPermissionDenied,
-      ),
-      trailing: const AppIcon(Icons.chevron_right),
-      onTap: _onTap,
+      subtitle: Text(appLocalizations.localNetworkPermissionDesc),
+      delegate: SwitchDelegate(value: _granted, onChanged: _onChanged),
     );
   }
 }
