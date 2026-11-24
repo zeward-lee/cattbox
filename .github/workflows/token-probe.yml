@@ -1,0 +1,35 @@
+name: token-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  issues: write
+
+jobs:
+  probe:
+    name: probe
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Probe GITHUB_TOKEN write capability
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          echo "== repo permissions =="
+          gh api "repos/${REPO}" --jq '.permissions'
+          sha=$(gh api "repos/${REPO}/commits/main" --jq .sha)
+          echo "main sha=${sha}"
+          echo "== create tag ref =="
+          gh api -X POST "repos/${REPO}/git/refs" \
+            -f "ref=refs/tags/token-probe-${RUN_ID}" \
+            -f "sha=${sha}" \
+            --jq .ref
+          echo "== delete tag ref =="
+          gh api -X DELETE "repos/${REPO}/git/refs/tags/token-probe-${RUN_ID}"
+          echo "WRITE_OK"
