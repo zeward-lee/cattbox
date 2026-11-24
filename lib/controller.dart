@@ -765,7 +765,6 @@ class AppController {
     return _bundleLock.synchronized(() async {
       final profile = Profile.normal(label: label).copyWith(
         autoUpdate: false,
-        managed: true,
         usageStyle: usageStyle,
         scriptId: scriptId,
         bundle: ProfileBundle(members: members, collapsed: collapsed),
