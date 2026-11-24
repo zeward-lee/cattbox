@@ -281,7 +281,6 @@ jobs:
           name: Bettbox-windows-${{ matrix.arch }}-installer
           path: |
             dist/*.exe
-            dist/*.zip
           archive: false
           overwrite: true
           if-no-files-found: warn
