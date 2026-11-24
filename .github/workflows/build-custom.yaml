@@ -20,6 +20,16 @@ name: build-custom
 #   not built here.
 on:
   workflow_dispatch:
+  # Reusable entry point for .github/workflows/auto-sync.yaml. A dispatch leaves
+  # inputs.ref empty (=> github.sha, unchanged behaviour); a caller passes the
+  # exact merged commit it wants built.
+  workflow_call:
+    inputs:
+      ref:
+        description: commit/branch to build
+        type: string
+        required: false
+        default: ''
 
 env:
   # A dispatch from a branch must still produce a STABLE build: the branch name
@@ -62,6 +72,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
           fetch-depth: 1
 
       # Android signing material: keystore + local.properties.
@@ -283,9 +294,9 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Bettbox-windows-${{ matrix.arch }}-installer
-          path: |
-            dist/*.exe
-          archive: false
+          # Default zip on purpose: the release lane expands the artifact and
+          # picks the exact file name, so multi-file dist/ must stay uploadable.
+          path: ./dist/*
           overwrite: true
           if-no-files-found: warn
 
@@ -336,8 +347,7 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: Bettbox-android${{ matrix.lite == true && '-lite' || '' }}-${{ matrix.arch }}-v8a
-          path: ./dist/*.apk
-          archive: false
+          path: ./dist/*
           overwrite: true
           if-no-files-found: error
 

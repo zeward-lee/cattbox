@@ -1,0 +1,452 @@
+name: auto-sync
+
+# Watches appshubcc/Bettbox for a new formal tag, merges it into main, runs the
+# kernel protocol check, builds all platforms through build-custom.yaml and
+# publishes a Release. Every guard that would publish something unsafe exits 0
+# after opening an Issue, so a normal "skip" never paints the run red.
+on:
+  schedule:
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      build_only:
+        description: 'drill only: build current main, skip sync and release'
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+  issues: write
+
+concurrency:
+  group: auto-sync
+  cancel-in-progress: false
+
+jobs:
+  sync:
+    name: sync upstream -> main
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: write
+      issues: write
+    outputs:
+      build: ${{ steps.merge.outputs.build }}
+      version: ${{ steps.merge.outputs.version }}
+      sha: ${{ steps.merge.outputs.sha }}
+      tag: ${{ steps.merge.outputs.tag }}
+    steps:
+      - name: Checkout main
+        uses: actions/checkout@v6
+        with:
+          ref: main
+          fetch-depth: 0
+
+      - name: Configure git identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+
+      - name: Resolve latest upstream release tag
+        id: upstream
+        shell: bash
+        run: |
+          set -euo pipefail
+          git remote add upstream https://github.com/appshubcc/Bettbox.git >/dev/null 2>&1 \
+            || git remote set-url upstream https://github.com/appshubcc/Bettbox.git
+          git fetch --tags upstream --force
+
+          # Formal tags only: refs/tags/vX.Y.Z, no -pre/-test, no ^{} peel lines.
+          tag=$(git ls-remote --tags upstream 'refs/tags/v*' \
+            | awk '{print $2}' \
+            | sed 's#^refs/tags/##' \
+            | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' \
+            | sort -V | tail -1) || true
+
+          cur_full=$(awk '/^version:/{print $2}' pubspec.yaml)
+          cur_ver=${cur_full%%+*}
+          echo "current=$cur_ver"
+
+          if [ -z "$tag" ]; then
+            echo "no formal upstream tag found"
+            echo "do_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          up_ver=${tag#v}
+          echo "upstream tag=$tag version=$up_ver"
+
+          if [ "$up_ver" = "$cur_ver" ]; then
+            echo "upstream version equals current; nothing to do"
+            echo "do_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          if [ "$(printf '%s\n%s\n' "$up_ver" "$cur_ver" | sort -V | sed -n '1p')" = "$up_ver" ]; then
+            echo "upstream $up_ver is not newer than current $cur_ver; nothing to do"
+            echo "do_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "refs/tags/${tag}" origin/main; then
+            echo "upstream ${tag} is already an ancestor of main; nothing to do"
+            echo "do_sync=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          {
+            echo "do_sync=true"
+            echo "tag=${tag}"
+            echo "version=${up_ver}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Merge upstream tag
+        id: merge
+        if: steps.upstream.outputs.do_sync == 'true' && (github.event_name != 'workflow_dispatch' || inputs.build_only != true)
+        shell: bash
+        env:
+          UP_TAG: ${{ steps.upstream.outputs.tag }}
+          UP_VER: ${{ steps.upstream.outputs.version }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          create_issue() {
+            gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+            gh issue create --title "$1" --label auto-sync --body "$2"
+          }
+
+          finish_no_build() {
+            {
+              echo "build=false"
+              echo "tag=${UP_TAG}"
+            } >> "$GITHUB_OUTPUT"
+            exit 0
+          }
+
+          # Path set referenced by the LAN-managed script, one per line.
+          extract_rules() {
+            python3 - "$1" <<'PY'
+          import re
+          import sys
+          with open(sys.argv[1], encoding='utf-8') as fh:
+              text = fh.read()
+          for path in sorted(set(re.findall(r'\$\{ruleSetBaseUrl\}([^`"\']+)', text))):
+              print(path)
+          PY
+          }
+
+          extract_rules assets/scripts/managed.js > "${RUNNER_TEMP}/rules_before.txt"
+
+          set +e
+          git merge --no-ff "$UP_TAG" -m "merge: upstream ${UP_TAG} (auto-sync)"
+          merge_rc=$?
+          set -e
+
+          if [ "$merge_rc" -ne 0 ]; then
+            mapfile -t conflicts < <(git diff --name-only --diff-filter=U | sort)
+            if [ ${#conflicts[@]} -eq 0 ]; then
+              echo "::error::merge failed without reported conflicts"
+              git merge --abort || true
+              exit 1
+            fi
+            if [ ${#conflicts[@]} -eq 1 ] && [ "${conflicts[0]}" = 'pubspec.yaml' ]; then
+              echo "only pubspec.yaml conflicts: take upstream side, re-stamp our version"
+              git checkout --theirs pubspec.yaml
+              stamp="${UP_VER}+$(date -u +%Y%m%d)$(printf '%02d' $((GITHUB_RUN_NUMBER % 100)))"
+              sed -i -E "s/^version: .*/version: ${stamp}/" pubspec.yaml
+              git add pubspec.yaml
+              git commit -m "chore(version): align with upstream ${UP_TAG} (auto-sync)"
+            else
+              echo "::error::merge conflict outside pubspec.yaml"
+              git merge --abort || true
+              {
+                echo "上游 tag: ${UP_TAG}"
+                echo
+                echo '冲突文件:'
+                echo
+                printf -- '- `%s`\n' "${conflicts[@]}"
+              } > "${RUNNER_TEMP}/conflict_body.md"
+              create_issue "[auto-sync] 合并冲突需人工处理 ${UP_TAG}" "$(cat "${RUNNER_TEMP}/conflict_body.md")"
+              finish_no_build
+            fi
+          fi
+
+          # Mirror guard: the rule set files live on a LAN mirror the runner
+          # cannot reach. Publishing a managed.js that points at a missing path
+          # would break every managed profile, so refuse to push instead.
+          extract_rules assets/scripts/managed.js > "${RUNNER_TEMP}/rules_after.txt"
+          mapfile -t new_paths < <(comm -13 "${RUNNER_TEMP}/rules_before.txt" "${RUNNER_TEMP}/rules_after.txt")
+          if [ ${#new_paths[@]} -gt 0 ]; then
+            echo "::error::managed.js now references rule set paths missing from the LAN mirror"
+            git reset --hard origin/main
+            {
+              echo "上游 tag: ${UP_TAG}"
+              echo
+              echo '新增规则集路径（需先同步到内网镜像）:'
+              echo
+              printf -- '- `%s`\n' "${new_paths[@]}"
+            } > "${RUNNER_TEMP}/rules_body.md"
+            create_issue "[auto-sync] 托管脚本新增规则集，需同步内网镜像 ${UP_TAG}" "$(cat "${RUNNER_TEMP}/rules_body.md")"
+            finish_no_build
+          fi
+
+          git push origin main
+
+          new_full=$(awk '/^version:/{print $2}' pubspec.yaml)
+          new_ver=${new_full%%+*}
+          {
+            echo "build=true"
+            echo "version=${new_ver}"
+            echo "sha=$(git rev-parse HEAD)"
+            echo "tag=${UP_TAG}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Report sync failure
+        if: failure()
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+          gh issue create \
+            --title "[auto-sync] 同步失败 $(date -u +%Y-%m-%d)" \
+            --label auto-sync \
+            --body "$(printf 'run: %s\n失败 job: sync' "${RUN_URL}")"
+
+  core:
+    name: core check
+    needs: sync
+    if: needs.sync.outputs.build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.build_only == true)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/core-check.yml
+    with:
+      ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_only == true) && github.sha || needs.sync.outputs.sha }}
+
+  build:
+    name: build
+    needs: [sync, core]
+    if: needs.sync.outputs.build == 'true' || (github.event_name == 'workflow_dispatch' && inputs.build_only == true)
+    permissions:
+      contents: read
+    uses: ./.github/workflows/build-custom.yaml
+    with:
+      ref: ${{ (github.event_name == 'workflow_dispatch' && inputs.build_only == true) && github.sha || needs.sync.outputs.sha }}
+    secrets: inherit
+
+  release:
+    name: release
+    needs: [sync, build]
+    if: needs.build.result == 'success' && needs.sync.outputs.build == 'true' && (github.event_name != 'workflow_dispatch' || inputs.build_only != true)
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: write
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
+      VERSION: ${{ needs.sync.outputs.version }}
+      SHA: ${{ needs.sync.outputs.sha }}
+      UP_TAG: ${{ needs.sync.outputs.tag }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+    steps:
+      - name: Download build artifacts
+        uses: actions/download-artifact@v7
+        with:
+          pattern: Bettbox-*
+          path: artifacts
+
+      - name: Expand artifacts and pick exact files
+        id: pick
+        shell: bash
+        run: |
+          set -euo pipefail
+          while IFS= read -r -d '' z; do
+            unzip -o -q "$z" -d "${z%.zip}"
+          done < <(find artifacts -type f -name '*.zip' -print0)
+
+          apk_name="Bettbox-${VERSION}-android-arm64-v8a.apk"
+          exe_name="Bettbox-${VERSION}-windows-amd64-setup.exe"
+          mapfile -t apks < <(find artifacts -type f -name "$apk_name")
+          mapfile -t exes < <(find artifacts -type f -name "$exe_name")
+          echo "apk matches: ${#apks[@]}  exe matches: ${#exes[@]}"
+
+          if [ ${#apks[@]} -ne 1 ] || [ ${#exes[@]} -ne 1 ]; then
+            gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+            gh issue create \
+              --title "[auto-sync] 发布失败 ${VERSION}" \
+              --label auto-sync \
+              --body "$(printf '找不到唯一的构建产物（apk=%s, exe=%s）。期望: %s / %s\nrun: %s' "${#apks[@]}" "${#exes[@]}" "$apk_name" "$exe_name" "${RUN_URL}")"
+            exit 1
+          fi
+
+          {
+            echo "apk=${apks[0]}"
+            echo "exe=${exes[0]}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Verify APK protocol markers
+        shell: bash
+        env:
+          APK: ${{ steps.pick.outputs.apk }}
+        run: |
+          set -euo pipefail
+          python3 - "$APK" <<'PY'
+          import sys
+          import zipfile
+          with zipfile.ZipFile(sys.argv[1]) as zf:
+              so = zf.read('lib/arm64-v8a/libmeta.so')
+          for marker in (b'sntp-eclipse', b'password-mode', b'fastup', b'x365', b'BLACKSTONE'):
+              assert so.count(marker) > 0, marker.decode()
+          print('protocol markers ok')
+          PY
+
+      - name: Stage release files and sha256sums.txt
+        shell: bash
+        env:
+          APK: ${{ steps.pick.outputs.apk }}
+          EXE: ${{ steps.pick.outputs.exe }}
+        run: |
+          set -euo pipefail
+          out="${RUNNER_TEMP}/release"
+          mkdir -p "$out"
+          apk_name=$(basename "$APK")
+          exe_name=$(basename "$EXE")
+          cp "$APK" "$EXE" "$out/"
+          (
+            cd "$out"
+            sha256sum "$apk_name" "$exe_name" > sha256sums.txt
+            cat sha256sums.txt
+          )
+          {
+            echo "RELEASE_DIR=$out"
+            echo "APK_NAME=$apk_name"
+            echo "EXE_NAME=$exe_name"
+          } >> "$GITHUB_ENV"
+
+      - name: Refuse to overwrite an existing tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          if gh api "repos/${REPO}/git/ref/tags/v${VERSION}" >/dev/null 2>&1; then
+            gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+            gh issue create \
+              --title "[auto-sync] 发布失败 ${VERSION}" \
+              --label auto-sync \
+              --body "$(printf '远端已存在 tag v%s，发布停止（未删除任何 tag/Release）。\nrun: %s' "${VERSION}" "${RUN_URL}")"
+            exit 1
+          fi
+
+      - name: Compose release notes
+        shell: bash
+        run: |
+          set -euo pipefail
+          body=$(gh api "repos/appshubcc/Bettbox/releases/tags/${UP_TAG}" --jq .body 2>/dev/null || true)
+          if [ -z "$body" ]; then
+            body="同步上游 ${UP_TAG}"
+          fi
+          {
+            printf '%s\n\n' "$body"
+            echo '## 安装包'
+            echo
+            echo "- \`${APK_NAME}\`"
+            echo "- \`${EXE_NAME}\`"
+            echo "- \`sha256sums.txt\`"
+            echo
+            echo '私有协议与私有功能保留。'
+          } > "${RUNNER_TEMP}/notes.md"
+
+      - name: Create GitHub Release
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release create "v${VERSION}" \
+            --target "${SHA}" \
+            --title "Bettbox ${VERSION}" \
+            --notes-file "${RUNNER_TEMP}/notes.md"
+
+      - name: Upload release assets
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh release upload "v${VERSION}" \
+            "${RELEASE_DIR}/${APK_NAME}" \
+            "${RELEASE_DIR}/${EXE_NAME}" \
+            "${RELEASE_DIR}/sha256sums.txt"
+
+      - name: Verify published release
+        shell: bash
+        run: |
+          set -euo pipefail
+          latest=$(gh api "repos/${REPO}/releases/latest" --jq .tag_name)
+          echo "latest=${latest} expected=v${VERSION}"
+          [ "$latest" = "v${VERSION}" ]
+          mapfile -t assets < <(gh api "repos/${REPO}/releases/tags/v${VERSION}" --jq '.assets[].name' | sort)
+          printf 'asset: %s\n' "${assets[@]}"
+          [ ${#assets[@]} -eq 3 ]
+          diff <(printf '%s\n' "${assets[@]}") \
+               <(printf '%s\n' "$APK_NAME" "$EXE_NAME" sha256sums.txt | sort)
+
+      - name: Report release failure
+        if: failure()
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+          existing=$(gh issue list --state open --label auto-sync --limit 100 \
+            --json number,title --jq 'first(.[] | select(.title == "[auto-sync] 发布失败 '"${VERSION}"'") | .number) // empty')
+          body=$(printf 'run: %s\n失败 job: release' "${RUN_URL}")
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "[auto-sync] 发布失败 ${VERSION}" --label auto-sync --body "$body"
+          fi
+
+  notify-failure:
+    name: notify failure
+    needs: [sync, core, build, release]
+    if: failure()
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      issues: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      SYNC_RESULT: ${{ needs.sync.result }}
+      CORE_RESULT: ${{ needs.core.result }}
+      BUILD_RESULT: ${{ needs.build.result }}
+      RELEASE_RESULT: ${{ needs.release.result }}
+    steps:
+      - name: Open or comment the pipeline failure issue
+        shell: bash
+        run: |
+          set -euo pipefail
+          gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+
+          failed=""
+          for pair in "sync:${SYNC_RESULT}" "core:${CORE_RESULT}" "build:${BUILD_RESULT}" "release:${RELEASE_RESULT}"; do
+            name=${pair%%:*}
+            result=${pair#*:}
+            case "$result" in
+              failure|cancelled) failed="${failed:+${failed}, }${name}" ;;
+            esac
+          done
+          [ -n "$failed" ] || failed="(unknown)"
+
+          title="[auto-sync] 流水线失败 $(date -u +%Y-%m-%d)"
+          body=$(printf 'run: %s\n失败 job: %s' "${RUN_URL}" "$failed")
+
+          existing=$(gh issue list --state open --label auto-sync --limit 100 \
+            --json number,title --jq 'first(.[] | select(.title | startswith("[auto-sync] 流水线失败")) | .number) // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "$body"
+          else
+            gh issue create --title "$title" --label auto-sync --body "$body"
+          fi

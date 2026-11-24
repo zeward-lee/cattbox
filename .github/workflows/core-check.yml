@@ -3,6 +3,15 @@ name: Core Check
 # Manual-only: no push/tag trigger, so this never burns runner minutes on its own.
 on:
   workflow_dispatch:
+  # Reusable entry point for .github/workflows/auto-sync.yaml: the merged
+  # commit is checked before any platform build starts.
+  workflow_call:
+    inputs:
+      ref:
+        description: commit/branch to check
+        type: string
+        required: false
+        default: ''
 
 permissions:
   contents: read
@@ -16,6 +25,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
+          ref: ${{ inputs.ref != '' && inputs.ref || github.sha }}
           fetch-depth: 1
 
       - name: Setup Golang
