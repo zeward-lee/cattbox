@@ -6,7 +6,13 @@ name: build-custom
 # so upstream syncs never conflict; every private build lives here.
 # - No push trigger on branches on purpose: branch pushes must never consume
 #   runners.
-# - Manual verification goes through workflow_dispatch, releases through v* tags.
+# - workflow_dispatch is the ONLY trigger. The old `push: tags: v*` trigger is
+#   gone on purpose: creating a Release through the GitHub REST API also makes
+#   GitHub create refs/tags/v<ver>, which emits a push event and re-runs this
+#   whole 3-platform lane. That duplicate run is pure waste (and any future
+#   write-capable step could overwrite already-published assets). Publishing is
+#   always: dispatch build -> wait for success -> create Release via API, so a
+#   tag push must never start a build.
 # - Android lane ships the Lite variant only, arm64-v8a only (release-signed
 #   from the KEYSTORE secret). No fat/universal apk, no other ABIs: build
 #   exactly one apk to keep the release lane cheap and clear.
@@ -14,16 +20,14 @@ name: build-custom
 #   not built here.
 on:
   workflow_dispatch:
-  push:
-    tags:
-      - 'v*'
 
 env:
   # A dispatch from a branch must still produce a STABLE build: the branch name
   # contains '-' (feat/smart-core), which made IS_STABLE false and baked
   # APP_ENV=pre into the app. isPreRelease then stayed true, so the in-app
   # updater treated an equal remote tag as an update and the NEW badge never
-  # cleared. Tag pushes keep the old rule ('-' in the tag = prerelease).
+  # cleared. The tag-push half of this expression is now dead code (only
+  # workflow_dispatch exists); kept so a re-added trigger would still behave.
   IS_STABLE: ${{ github.event_name == 'workflow_dispatch' || !contains(github.ref, '-') }}
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
   SENTRY_BACKEND: none
