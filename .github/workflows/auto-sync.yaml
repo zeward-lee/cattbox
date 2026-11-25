@@ -203,6 +203,62 @@ jobs:
             finish_no_build
           fi
 
+          # Layer 1: duplicate symbols / duplicate l10n keys. A merge can be
+          # conflict-free and still leave two declarations of the same symbol
+          # (2026-11-25: two requestLocalNetworkPermission branches in one
+          # `when`, two Dart methods, three l10n files with a repeated key).
+          # Compilers report one at a time, so fail before the build lanes burn
+          # time on it. Output is captured first so the `||` branch cannot be
+          # confused by a failing pipe under `set -euo pipefail`.
+          echo "::group::dup symbol check"
+          dup_rc=0
+          python3 ci/dup-symbol-check.py > "${RUNNER_TEMP}/dup_check.log" 2>&1 || dup_rc=$?
+          cat "${RUNNER_TEMP}/dup_check.log"
+          if [ "$dup_rc" -ne 0 ]; then
+            git reset --hard origin/main
+            {
+              echo "上游 tag: ${UP_TAG}"
+              echo
+              echo '合并结果里存在重复符号 / 重复 l10n 键（编译器一次只报一条，这里一次列全）:'
+              echo
+              echo '```'
+              cat "${RUNNER_TEMP}/dup_check.log"
+              echo '```'
+              echo
+              echo '按规则默认动作：删我们的补丁（保留上游实现），修好后重新触发 auto-sync。'
+            } > "${RUNNER_TEMP}/dup_body.md"
+            create_issue "[auto-sync] 合并后出现重复符号/重复 l10n 键 ${UP_TAG}" "$(cat "${RUNNER_TEMP}/dup_body.md")"
+            finish_no_build
+          fi
+          echo "::endgroup::"
+
+          # Layer 2: private-increment audit. Tells us when upstream touched a
+          # file where one of our increments lives (informational) and blocks
+          # when upstream already ships an equivalent symbol, because the house
+          # rule is "upstream wins, delete our patch".
+          echo "::group::increment audit"
+          inc_rc=0
+          python3 ci/increment-audit.py --upstream-tag "${UP_TAG}" \
+            > "${RUNNER_TEMP}/increment_check.log" 2>&1 || inc_rc=$?
+          cat "${RUNNER_TEMP}/increment_check.log"
+          if [ "$inc_rc" -ne 0 ]; then
+            git reset --hard origin/main
+            {
+              echo "上游 tag: ${UP_TAG}"
+              echo
+              echo '增量审计命中（上游已实现等价能力，或审计无法运行）:'
+              echo
+              echo '```'
+              cat "${RUNNER_TEMP}/increment_check.log"
+              echo '```'
+              echo
+              echo '按规则默认动作：删我们的补丁（保留上游实现）；若确认上游语义不同，人工判断后再放行。'
+            } > "${RUNNER_TEMP}/increment_body.md"
+            create_issue "[auto-sync] 上游已实现我们的增量，需删我们的补丁 ${UP_TAG}" "$(cat "${RUNNER_TEMP}/increment_body.md")"
+            finish_no_build
+          fi
+          echo "::endgroup::"
+
           git push origin main
 
           new_full=$(awk '/^version:/{print $2}' pubspec.yaml)

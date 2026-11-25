@@ -1,0 +1,92 @@
+{
+  "version": 1,
+  "policy": "上游已实现同名或等价能力时，按『上游优先』删掉我们的增量；exempt 条目（私有协议层）永不判定。",
+  "increments": [
+    {
+      "id": "private-protocols",
+      "desc": "x365 / xhttp / sntp-eclipse / ninja / fastup / shanlian / blackstone / miu / oppa 的解析与出站实现；上游不可能有，永不判定（只保留文件重叠提示）",
+      "files": [
+        "core/Clash.Meta/adapter/private_parsers.go",
+        "core/Clash.Meta/adapter/outbound/*.go"
+      ],
+      "symbols": [],
+      "exempt": true
+    },
+    {
+      "id": "smart-group",
+      "desc": "智能分组（smart group）出站策略组",
+      "files": [
+        "core/Clash.Meta/adapter/outboundgroup/smart.go"
+      ],
+      "symbols": [
+        "outboundgroup\\.Smart",
+        "\"smart\""
+      ],
+      "scope": [
+        "core"
+      ],
+      "exempt": false
+    },
+    {
+      "id": "private-host-direct",
+      "desc": "私网/回环地址强制直连；上游若出现 isPrivateHost 或等价实现，判定为应删我们的补丁",
+      "files": [
+        "lib/common/http.dart"
+      ],
+      "symbols": [
+        "isPrivateHost"
+      ],
+      "exempt": false
+    },
+    {
+      "id": "ua-history",
+      "desc": "自定义 User-Agent 历史记录",
+      "files": [
+        "lib/views/profiles/edit_profile.dart",
+        "lib/models/profile.dart",
+        "lib/common/constant.dart"
+      ],
+      "symbols": [
+        "userAgentHistoryKey"
+      ],
+      "exempt": false
+    },
+    {
+      "id": "managed-script",
+      "desc": "托管脚本 managed.js 的规则集路径集合；私有内容只靠文件重叠提示人工复核，不做硬判定",
+      "files": [
+        "lib/common/managed_script.dart",
+        "assets/scripts/managed.js"
+      ],
+      "symbols": [
+        "managed\\.js 规则集路径集合"
+      ],
+      "block": false,
+      "exempt": false
+    },
+    {
+      "id": "vpn-exclude-self",
+      "desc": "VPN 建立时无条件排除自身包（黑名单模式同样排除）；上游 vpn 服务里已有按用户列表的 addDisallowedApplication(appPkg)，故这里只认定『排除自身包』形式，避免对上游既有写法误报",
+      "files": [
+        "android/**/plugins/ServicePlugin.kt",
+        "android/**/services/BettboxVpnService.kt"
+      ],
+      "symbols": [
+        "addDisallowedApplication\\s*\\(\\s*packageName\\s*\\)"
+      ],
+      "scope": [
+        "android"
+      ],
+      "exempt": false
+    },
+    {
+      "id": "ci-condensed-matrix",
+      "desc": "自定义精简构建矩阵（build-custom.yaml）；无符号，只做文件重叠提示",
+      "files": [
+        ".github/workflows/build-custom.yaml"
+      ],
+      "symbols": [],
+      "exempt": false
+    }
+  ]
+}
