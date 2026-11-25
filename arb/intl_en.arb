@@ -395,7 +395,6 @@
   "localNetworkPermissionDesc": "Required on Android 16+ to reach devices on your local network (for example a LAN subscription URL). Without it, LAN requests keep timing out.",
   "localNetworkPermissionGranted": "Granted",
   "localNetworkPermissionDenied": "Not granted",
-  "localNetworkPermissionTip": "Local network access is not allowed, subscriptions cannot be updated",
   "localNetworkPermissionOpenSettings": "Open settings",
   "localRecoveryDesc": "Restore data from file",
   "mode": "Mode",

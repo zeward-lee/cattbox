@@ -395,7 +395,6 @@
   "localNetworkPermissionDesc": "Android 16 及以上访问局域网设备（如局域网订阅地址）需要此权限，未授权时局域网请求会一直超时。",
   "localNetworkPermissionGranted": "已授权",
   "localNetworkPermissionDenied": "未授权",
-  "localNetworkPermissionTip": "系统未允许访问局域网，订阅无法更新",
   "localNetworkPermissionOpenSettings": "去设置",
   "localRecoveryDesc": "通过文件恢复数据",
   "mode": "模式",

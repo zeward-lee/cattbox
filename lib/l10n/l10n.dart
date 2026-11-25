@@ -3310,16 +3310,6 @@ class AppLocalizations {
     );
   }
 
-  /// `Local network access is not allowed, subscriptions cannot be updated`
-  String get localNetworkPermissionTip {
-    return Intl.message(
-      'Local network access is not allowed, subscriptions cannot be updated',
-      name: 'localNetworkPermissionTip',
-      desc: '',
-      args: [],
-    );
-  }
-
   /// `Restore data from file`
   String get localRecoveryDesc {
     return Intl.message(

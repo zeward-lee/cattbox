@@ -1322,9 +1322,6 @@ class MessageLookup extends MessageLookupByLibrary {
     "localNetworkPermissionOpenSettings": MessageLookupByLibrary.simpleMessage(
       "Open settings",
     ),
-    "localNetworkPermissionTip": MessageLookupByLibrary.simpleMessage(
-      "Local network access is not allowed, subscriptions cannot be updated",
-    ),
     "localFile": MessageLookupByLibrary.simpleMessage("Local File"),
     "localNetworkPermissionTip": MessageLookupByLibrary.simpleMessage(
       "LAN proxy requires the Local network permission. Allow it for Bettbox in system settings.",

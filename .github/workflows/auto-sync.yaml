@@ -116,12 +116,12 @@ jobs:
           create_issue() {
             # Best-effort label; if it cannot be created (missing permissions),
             # fall back to creating the issue without the label.
-            gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
-            if gh issue create --title "$1" --label auto-sync --body "$2"; then
+            gh label create auto-sync --color FBCA04 --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true
+            if gh issue create --repo "${GITHUB_REPOSITORY}" --title "$1" --label auto-sync --body "$2"; then
               return 0
             fi
             echo "::warning::could not create issue with label auto-sync, retrying without label"
-            if gh issue create --title "$1" --body "$2"; then
+            if gh issue create --repo "${GITHUB_REPOSITORY}" --title "$1" --body "$2"; then
               return 0
             fi
             echo "::warning::failed to create tracking issue: $1"
@@ -222,8 +222,9 @@ jobs:
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
           set -euo pipefail
-          gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+          gh label create auto-sync --color FBCA04 --repo "${GITHUB_REPOSITORY}" >/dev/null 2>&1 || true
           gh issue create \
+            --repo "${GITHUB_REPOSITORY}" \
             --title "[auto-sync] 同步失败 $(date -u +%Y-%m-%d)" \
             --label auto-sync \
             --body "$(printf 'run: %s\n失败 job: sync' "${RUN_URL}")" \
@@ -429,6 +430,7 @@ jobs:
       issues: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      REPO: ${{ github.repository }}
       RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
       SYNC_RESULT: ${{ needs.sync.result }}
       CORE_RESULT: ${{ needs.core.result }}
@@ -439,25 +441,31 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
+          # No checkout in this job, so `gh` cannot infer the repository from a
+          # git dir; every call passes --repo explicitly. The whole block runs in
+          # a subshell whose failure is downgraded to a warning: reporting a
+          # failure must never turn the run red by itself.
+          (
+            gh label create auto-sync --color FBCA04 --repo "${REPO}" >/dev/null 2>&1 || true
 
-          failed=""
-          for pair in "sync:${SYNC_RESULT}" "core:${CORE_RESULT}" "build:${BUILD_RESULT}" "release:${RELEASE_RESULT}"; do
-            name=${pair%%:*}
-            result=${pair#*:}
-            case "$result" in
-              failure|cancelled) failed="${failed:+${failed}, }${name}" ;;
-            esac
-          done
-          [ -n "$failed" ] || failed="(unknown)"
+            failed=""
+            for pair in "sync:${SYNC_RESULT}" "core:${CORE_RESULT}" "build:${BUILD_RESULT}" "release:${RELEASE_RESULT}"; do
+              name=${pair%%:*}
+              result=${pair#*:}
+              case "$result" in
+                failure|cancelled) failed="${failed:+${failed}, }${name}" ;;
+              esac
+            done
+            [ -n "$failed" ] || failed="(unknown)"
 
-          title="[auto-sync] 流水线失败 $(date -u +%Y-%m-%d)"
-          body=$(printf 'run: %s\n失败 job: %s' "${RUN_URL}" "$failed")
+            title="[auto-sync] 流水线失败 $(date -u +%Y-%m-%d)"
+            body=$(printf 'run: %s\n失败 job: %s' "${RUN_URL}" "$failed")
 
-          existing=$(gh issue list --state open --label auto-sync --limit 100 \
-            --json number,title --jq 'first(.[] | select(.title | startswith("[auto-sync] 流水线失败")) | .number) // empty')
-          if [ -n "$existing" ]; then
-            gh issue comment "$existing" --body "$body"
-          else
-            gh issue create --title "$title" --label auto-sync --body "$body"
-          fi
+            existing=$(gh issue list --repo "${REPO}" --state open --label auto-sync --limit 100 \
+              --json number,title --jq 'first(.[] | select(.title | startswith("[auto-sync] 流水线失败")) | .number) // empty')
+            if [ -n "$existing" ]; then
+              gh issue comment --repo "${REPO}" "$existing" --body "$body"
+            else
+              gh issue create --repo "${REPO}" --title "$title" --label auto-sync --body "$body"
+            fi
+          ) || echo "::warning::could not report pipeline failure via issue (non-fatal)"

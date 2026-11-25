@@ -990,9 +990,6 @@ class MessageLookup extends MessageLookupByLibrary {
     "localNetworkPermissionOpenSettings": MessageLookupByLibrary.simpleMessage(
       "去设置",
     ),
-    "localNetworkPermissionTip": MessageLookupByLibrary.simpleMessage(
-      "系统未允许访问局域网，订阅无法更新",
-    ),
     "localFile": MessageLookupByLibrary.simpleMessage("本地文件"),
     "localNetworkPermissionTip": MessageLookupByLibrary.simpleMessage(
       "局域网代理需要「本地网络」权限，请在系统设置中为 Bettbox 开启。",
