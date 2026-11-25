@@ -710,7 +710,7 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
                 requestLocalNetworkPermission()
             }
             LOCAL_NETWORK_PERMISSION_REQUEST_CODE -> {
-                val granted = grantResults.isNotEmpty() &&
+val granted = grantResults.isNotEmpty() &&
                     grantResults[0] == PackageManager.PERMISSION_GRANTED
                 // 只有真正被拒绝时才置位；授予成功保持 false，便于其他入口继续检测。
                 isBlockLocalNetwork = !granted

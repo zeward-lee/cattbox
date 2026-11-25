@@ -240,7 +240,6 @@ enum ActionMethod {
   shutdown,
   validateConfig,
   importProfile,
-  downloadProfile,
   updateConfig,
   getConfig,
   getRuntimeConfig,

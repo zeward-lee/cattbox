@@ -1273,6 +1273,9 @@ abstract class RouteRuleSet with _$RouteRuleSet {
     String? name,
     String? icon,
     int? count,
+    @JsonKey(name: 'in') @Default([]) List<int> parents,
+    @Default([]) List<int> under,
+    @Default(false) bool broad,
   }) = _RouteRuleSet;
 
   factory RouteRuleSet.fromJson(Map<String, Object?> json) =>

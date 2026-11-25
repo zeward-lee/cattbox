@@ -114,8 +114,18 @@ jobs:
           set -euo pipefail
 
           create_issue() {
+            # Best-effort label; if it cannot be created (missing permissions),
+            # fall back to creating the issue without the label.
             gh label create auto-sync --color FBCA04 >/dev/null 2>&1 || true
-            gh issue create --title "$1" --label auto-sync --body "$2"
+            if gh issue create --title "$1" --label auto-sync --body "$2"; then
+              return 0
+            fi
+            echo "::warning::could not create issue with label auto-sync, retrying without label"
+            if gh issue create --title "$1" --body "$2"; then
+              return 0
+            fi
+            echo "::warning::failed to create tracking issue: $1"
+            return 0
           }
 
           finish_no_build() {
@@ -216,7 +226,8 @@ jobs:
           gh issue create \
             --title "[auto-sync] 同步失败 $(date -u +%Y-%m-%d)" \
             --label auto-sync \
-            --body "$(printf 'run: %s\n失败 job: sync' "${RUN_URL}")"
+            --body "$(printf 'run: %s\n失败 job: sync' "${RUN_URL}")" \
+            || echo "::warning::failed to report sync failure via issue"
 
   core:
     name: core check

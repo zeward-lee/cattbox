@@ -192,6 +192,7 @@ class AboutView extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final iconCacheSize = (48 * MediaQuery.devicePixelRatioOf(context)).ceil();
     final items = [
       ListTile(
         title: Column(
@@ -210,9 +211,8 @@ class AboutView extends StatelessWidget {
                           'assets/images/icon.png',
                           width: 48,
                           height: 48,
-                          cacheWidth: 48,
-                          cacheHeight: 48,
-                          useLogicalCacheSize: true,
+                          cacheWidth: iconCacheSize,
+                          cacheHeight: iconCacheSize,
                         ),
                       ),
                       Column(
@@ -222,9 +222,16 @@ class AboutView extends StatelessWidget {
                             appName,
                             style: Theme.of(context).textTheme.headlineSmall,
                           ),
-                          Text(
-                            '${globalState.packageInfo.version}+${globalState.packageInfo.buildNumber}',
-                            style: Theme.of(context).textTheme.labelLarge,
+                          Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Text(
+                                '${globalState.packageInfo.version}+${globalState.packageInfo.buildNumber}',
+                                style: Theme.of(context).textTheme.labelLarge,
+                              ),
+                              if (!AppIdentity.isStandard)
+                                const _BuildTagsHint(),
+                            ],
                           ),
                         ],
                       ),
@@ -256,6 +263,28 @@ class AboutView extends StatelessWidget {
       ..._buildMoreSection(context),
     ];
     return generateListView(items);
+  }
+}
+
+class _BuildTagsHint extends StatelessWidget {
+  const _BuildTagsHint();
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: () => context.showNotifier(
+        'Built with no_tailscale, no_easytier, no_zerotier, no_fake_tcp, no_gvisor',
+      ),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
+        child: Icon(
+          Icons.error_outline,
+          size: 16,
+          color: context.colorScheme.onSurfaceVariant,
+        ),
+      ),
+    );
   }
 }
 
@@ -361,8 +390,8 @@ class _ContributorsWallState extends State<_ContributorsWall> {
               child: Image.asset(
                 contributor.avatar,
                 fit: BoxFit.cover,
-                cacheWidth: _base.ceil(),
-                useLogicalCacheSize: true,
+                cacheWidth: (_base * MediaQuery.devicePixelRatioOf(context))
+                    .ceil(),
               ),
             ),
           ),
