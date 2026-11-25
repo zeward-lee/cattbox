@@ -5,8 +5,8 @@ Run this *after* the merge commit exists (i.e. from the auto-sync workflow right
 before `git push`). Two independent questions are answered:
 
   * Informational: did upstream touch any file where one of our private
-    increments lives? (`git diff --name-only HEAD^1 HEAD^2` vs the file globs
-    in ci/private-increments.json). Never blocks.
+    increments lives? (`git diff --name-only merge-base(HEAD^1, HEAD^2) HEAD^2`
+    vs the file globs in ci/private-increments.json). Never blocks.
   * Hard: did upstream already ship a symbol that is equivalent to one of our
     increments? If yes, the house rule is "upstream wins, delete our patch",
     so this exits 1 and prints where the equivalent symbol lives upstream.
@@ -83,12 +83,16 @@ def glob_match(path: str, pattern: str) -> bool:
     return False
 
 
-def resolve_merge_sides(root: Path, tag: str) -> Tuple[str, str, str]:
-    """Return (base, head, mode) describing "what upstream changed this time"."""
+def resolve_upstream_sides(root: Path, tag: str) -> Tuple[str, str, str]:
+    """Return (ours, upstream, context): the two sides of the upstream sync.
+
+    `ours` is our pre-merge main, `upstream` is the upstream tag commit. Their
+    *merge-base* (not `ours` itself) is what upstream changed from.
+    """
     line = git_ok(root, "rev-list", "--parents", "-n", "1", "HEAD").strip()
     fields = line.split()
     if len(fields) == 3:
-        return fields[1], fields[2], "merge (HEAD^1..HEAD^2)"
+        return fields[1], fields[2], "HEAD"
 
     # HEAD is not a merge commit (manual run on a normal history): reuse the
     # parents of the most recent merge commit, which is the same change set the
@@ -101,8 +105,7 @@ def resolve_merge_sides(root: Path, tag: str) -> Tuple[str, str, str]:
             return (
                 merge_fields[1],
                 merge_fields[2],
-                "fallback (last merge %s: HEAD^1..HEAD^2)"
-                % merge_line[:12],
+                "last merge %s" % merge_line[:12],
             )
 
     # No merge anywhere: compare the release against its parent commit.
@@ -112,10 +115,44 @@ def resolve_merge_sides(root: Path, tag: str) -> Tuple[str, str, str]:
             "HEAD is not a merge commit and %s has no parent; cannot derive an "
             "upstream change set" % tag
         )
+    return parent.stdout.strip(), tag, "%s^" % tag
+
+
+def resolve_merge_sides(
+    root: Path, tag: str, base_override: Optional[str] = None
+) -> Tuple[str, str, str]:
+    """Return (base, head, mode) describing "what upstream changed this time".
+
+    base is merge-base(ours, upstream) so our own private files never show up as
+    upstream changes. `base_override` (--base) replaces that computation.
+    """
+    ours, upstream, context = resolve_upstream_sides(root, tag)
+
+    if base_override:
+        resolved = git(root, "rev-parse", "--verify", "--quiet",
+                       "%s^{commit}" % base_override)
+        if resolved.returncode != 0 or not resolved.stdout.strip():
+            raise RuntimeError("cannot resolve --base %r to a commit" % base_override)
+        return (
+            resolved.stdout.strip(),
+            upstream,
+            "explicit --base %s" % base_override,
+        )
+
+    proc = git(root, "merge-base", ours, upstream)
+    if proc.returncode == 0 and proc.stdout.strip():
+        base = proc.stdout.strip()
+        mode = "merge-base %s..%s" % (ours[:12], upstream[:12])
+        if context != "HEAD":
+            mode += " (%s)" % context
+        return base, upstream, mode
+
+    # Shallow clone or unrelated histories: keep the old behaviour but say so.
     return (
-        parent.stdout.strip(),
-        tag,
-        "fallback (%s^..%s, no merge commit in history)" % (tag, tag),
+        ours,
+        upstream,
+        "fallback %s..%s (merge-base failed: %s)"
+        % (ours[:12], upstream[:12], proc.stderr.strip()),
     )
 
 
@@ -142,7 +179,12 @@ def load_config(path: Path) -> List[Dict]:
     return increments
 
 
-def audit(root: Path, config_path: Path, tag: str) -> int:
+def audit(
+    root: Path,
+    config_path: Path,
+    tag: str,
+    base_override: Optional[str] = None,
+) -> int:
     increments = load_config(config_path)
 
     tag_commit = git(root, "rev-parse", "--verify", "--quiet", "%s^{commit}" % tag)
@@ -155,7 +197,7 @@ def audit(root: Path, config_path: Path, tag: str) -> int:
         return EXIT_CANNOT_RUN
 
     try:
-        base, head, mode = resolve_merge_sides(root, tag)
+        base, head, mode = resolve_merge_sides(root, tag, base_override)
         changed_output = git_ok(root, "diff", "--name-only", base, head)
     except RuntimeError as exc:
         print("increment-audit: %s" % exc, file=sys.stderr)
@@ -258,6 +300,9 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     )
     parser.add_argument("--upstream-tag", required=True,
                         help="upstream release tag that was merged, e.g. v1.20.1")
+    parser.add_argument("--base", default=None,
+                        help="override the baseline commit (default: "
+                             "merge-base of our main and the upstream tag)")
     parser.add_argument("--config", default=None,
                         help="path to private-increments.json (default: next to this script)")
     args = parser.parse_args(argv)
@@ -271,7 +316,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return EXIT_CANNOT_RUN
 
     try:
-        return audit(root, config_path, args.upstream_tag)
+        return audit(root, config_path, args.upstream_tag, args.base)
     except (ValueError, RuntimeError) as exc:
         print("increment-audit: %s" % exc, file=sys.stderr)
         return EXIT_CANNOT_RUN

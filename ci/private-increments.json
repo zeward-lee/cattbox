@@ -58,9 +58,7 @@
         "lib/common/managed_script.dart",
         "assets/scripts/managed.js"
       ],
-      "symbols": [
-        "managed\\.js 规则集路径集合"
-      ],
+      "symbols": [],
       "block": false,
       "exempt": false
     },
