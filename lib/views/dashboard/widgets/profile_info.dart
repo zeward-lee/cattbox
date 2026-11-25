@@ -31,9 +31,6 @@ Future<void> _updateProfile(Profile profile) async {
     await appController.updateProfile(profile, applyUnchanged: false);
   } on Object catch (e) {
     appController.setProfile(profile.copyWith(isUpdating: false));
-    if (await LocalNetworkPermission.notifyUpdateFailed(e, url: profile.url)) {
-      return;
-    }
     unawaited(
       globalState.showMessage(
         title: appLocalizations.tip,

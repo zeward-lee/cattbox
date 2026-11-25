@@ -2504,9 +2504,6 @@ class AppController {
       toProfiles();
       await addProfile(profile);
     } on Object catch (e) {
-      if (await LocalNetworkPermission.notifyUpdateFailed(e, url: url)) {
-        return;
-      }
       await globalState.showMessage(
         title: appLocalizations.add,
         message: TextSpan(text: e.formatError),

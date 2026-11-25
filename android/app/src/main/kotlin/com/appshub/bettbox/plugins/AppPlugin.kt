@@ -83,12 +83,6 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
         private const val NOTIFICATION_PERMISSION_REQUEST_CODE = 1002
         private const val LOCAL_NETWORK_PERMISSION_REQUEST_CODE = 1003
         private const val LOCAL_NETWORK_PERMISSION = "android.permission.ACCESS_LOCAL_NETWORK"
-
-        // Android 16 (API 36) 起 ACCESS_LOCAL_NETWORK 变为运行时权限；未授予时系统会
-        // 静默丢弃应用发往私有网段（192.168/10/172.16-31）的报文，表现为连接超时。
-        private const val LOCAL_NETWORK_MIN_SDK = 36
-        private const val LOCAL_NETWORK_PREFS = "local_network_permission"
-        private const val LOCAL_NETWORK_PREF_ASKED = "asked"
         private const val CACHE_MAX_FILES = 500
         private const val PNG_MAGIC_SIZE = 8
 
@@ -144,6 +138,7 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
 
     private var isBlockNotification = false
     private var isBlockLocalNetwork = false
+    private var localNetworkResult: MethodChannel.Result? = null
     private var isActivityAttached = false
 
     override fun onAttachedToEngine(flutterPluginBinding: FlutterPlugin.FlutterPluginBinding) {
@@ -315,6 +310,9 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
             "hasCameraPermission" -> {
                 result.success(hasCameraPermission())
             }
+            "requestLocalNetworkPermission" -> {
+                requestLocalNetworkPermission(result)
+            }
             "openAppSettings" -> {
                 openAppSettings()
                 result.success(true)
@@ -335,16 +333,6 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
             }
             "openFcmDiagnostics" -> {
                 result.success(openFcmDiagnostics())
-            }
-            "isLocalNetworkPermissionSupported" -> {
-                result.success(Build.VERSION.SDK_INT >= LOCAL_NETWORK_MIN_SDK)
-            }
-            "hasLocalNetworkPermission" -> {
-                result.success(isLocalNetworkPermissionGranted())
-            }
-            "requestLocalNetworkPermission" -> {
-                val force = call.argument<Boolean>("force") ?: false
-                result.success(requestLocalNetworkPermission(force))
             }
             else -> result.notImplemented()
         }
@@ -566,53 +554,30 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
             !isBlockNotification &&
             ContextCompat.checkSelfPermission(BettboxApplication.getAppContext(), Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
         if (needsNotification) {
-            // 通知权限单独申请，结果回调里再串行申请本地网络权限，避免前者被跳过时
-            // 连带跳过后者。
             ActivityCompat.requestPermissions(activity, arrayOf(Manifest.permission.POST_NOTIFICATIONS), NOTIFICATION_PERMISSION_REQUEST_CODE)
             return
         }
         requestLocalNetworkPermission()
     }
 
-    private fun isLocalNetworkPermissionGranted(): Boolean {
-        if (Build.VERSION.SDK_INT < LOCAL_NETWORK_MIN_SDK) return true
-        return ContextCompat.checkSelfPermission(
-            BettboxApplication.getAppContext(),
-            LOCAL_NETWORK_PERMISSION
-        ) == PackageManager.PERMISSION_GRANTED
+    private fun requestLocalNetworkPermission() {
+        if (Build.VERSION.SDK_INT < 37 || isBlockLocalNetwork) return
+        val activity = activityRef?.get() ?: return
+        if (ContextCompat.checkSelfPermission(activity, LOCAL_NETWORK_PERMISSION) == PackageManager.PERMISSION_GRANTED) return
+        ActivityCompat.requestPermissions(activity, arrayOf(LOCAL_NETWORK_PERMISSION), LOCAL_NETWORK_PERMISSION_REQUEST_CODE)
     }
 
-    private fun wasLocalNetworkPermissionAsked(): Boolean =
-        BettboxApplication.getAppContext()
-            .getSharedPreferences(LOCAL_NETWORK_PREFS, Context.MODE_PRIVATE)
-            .getBoolean(LOCAL_NETWORK_PREF_ASKED, false)
-
-    private fun markLocalNetworkPermissionAsked() {
-        BettboxApplication.getAppContext()
-            .getSharedPreferences(LOCAL_NETWORK_PREFS, Context.MODE_PRIVATE)
-            .edit()
-            .putBoolean(LOCAL_NETWORK_PREF_ASKED, true)
-            .apply()
-    }
-
-    /**
-     * 申请本地网络访问权限。
-     * @return true 表示已授权或已发起系统授权；false 表示无法发起（低版本 / 无 Activity /
-     * 非强制模式下此前已询问过）。用户拒绝后系统可能不再弹窗（USER_SENSITIVE_WHEN_DENIED），
-     * 此时需引导用户去系统应用详情页手动开启。
-     */
-    fun requestLocalNetworkPermission(force: Boolean = false): Boolean {
-        if (Build.VERSION.SDK_INT < LOCAL_NETWORK_MIN_SDK) return true
-        if (isLocalNetworkPermissionGranted()) return true
-        if (!force && (isBlockLocalNetwork || wasLocalNetworkPermissionAsked())) return false
-        val activity = activityRef?.get() ?: return false
-        markLocalNetworkPermissionAsked()
-        ActivityCompat.requestPermissions(
-            activity,
-            arrayOf(LOCAL_NETWORK_PERMISSION),
-            LOCAL_NETWORK_PERMISSION_REQUEST_CODE
-        )
-        return true
+    private fun requestLocalNetworkPermission(result: MethodChannel.Result) {
+        val activity = activityRef?.get()
+        if (Build.VERSION.SDK_INT < 37 || activity == null ||
+            ContextCompat.checkSelfPermission(activity, LOCAL_NETWORK_PERMISSION) == PackageManager.PERMISSION_GRANTED
+        ) {
+            result.success(true)
+            return
+        }
+        localNetworkResult?.success(false)
+        localNetworkResult = result
+        ActivityCompat.requestPermissions(activity, arrayOf(LOCAL_NETWORK_PERMISSION), LOCAL_NETWORK_PERMISSION_REQUEST_CODE)
     }
 
     suspend fun getText(text: String): String? = withContext(Dispatchers.Default) {
@@ -688,6 +653,8 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
         activityRef = null
         cachedTaskId = null
         isActivityAttached = false
+        localNetworkResult?.success(false)
+        localNetworkResult = null
     }
 
     private fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?): Boolean {
@@ -706,17 +673,12 @@ class AppPlugin : FlutterPlugin, MethodChannel.MethodCallHandler, ActivityAware 
         when (requestCode) {
             NOTIFICATION_PERMISSION_REQUEST_CODE -> {
                 isBlockNotification = true
-                // 通知权限结果不阻塞本地网络权限的申请，串行继续。
                 requestLocalNetworkPermission()
             }
             LOCAL_NETWORK_PERMISSION_REQUEST_CODE -> {
-val granted = grantResults.isNotEmpty() &&
-                    grantResults[0] == PackageManager.PERMISSION_GRANTED
-                // 只有真正被拒绝时才置位；授予成功保持 false，便于其他入口继续检测。
-                isBlockLocalNetwork = !granted
-                if (::channel.isInitialized) {
-                    runCatching { channel.invokeMethod("localNetworkPermissionResult", granted) }
-                }
+                isBlockLocalNetwork = true
+                localNetworkResult?.success(grantResults.firstOrNull() == PackageManager.PERMISSION_GRANTED)
+                localNetworkResult = null
             }
         }
         return true

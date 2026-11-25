@@ -1,8 +1,5 @@
-import 'dart:async';
-
 import 'package:bett_box/common/common.dart';
 import 'package:bett_box/enum/enum.dart';
-import 'package:bett_box/plugins/app.dart';
 import 'package:bett_box/providers/config.dart';
 import 'package:bett_box/state.dart';
 import 'package:bett_box/widgets/widgets.dart';
@@ -632,107 +629,6 @@ class AutoDownloadUpdateItem extends ConsumerWidget {
   }
 }
 
-/// Android 16 (API 36) 起 `ACCESS_LOCAL_NETWORK` 为运行时权限。被用户拒绝后
-/// 系统可能不再弹授权框（USER_SENSITIVE_WHEN_DENIED），这里提供状态展示和
-/// 跳转系统应用详情页的手动授权入口。
-class LocalNetworkPermissionItem extends ConsumerStatefulWidget {
-  const LocalNetworkPermissionItem({super.key});
-
-  @override
-  ConsumerState<LocalNetworkPermissionItem> createState() =>
-      _LocalNetworkPermissionItemState();
-}
-
-class _LocalNetworkPermissionItemState
-    extends ConsumerState<LocalNetworkPermissionItem>
-    with WidgetsBindingObserver {
-  // null = 状态未知（首帧/查询未返回），此时不渲染，避免行出现后闪一下消失。
-  bool? _supported;
-  bool? _granted;
-  // 申请进行中的防重入标记（不参与 UI）
-  bool _requesting = false;
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addObserver(this);
-    app.onLocalNetworkPermissionResult = _handlePermissionResult;
-    unawaited(_refresh());
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    if (app.onLocalNetworkPermissionResult == _handlePermissionResult) {
-      app.onLocalNetworkPermissionResult = null;
-    }
-    super.dispose();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      unawaited(_refresh());
-    }
-  }
-
-  Future<void> _refresh() async {
-    final supported = await LocalNetworkPermission.isSupported();
-    if (!mounted) return;
-    var granted = false;
-    if (supported) {
-      granted = await LocalNetworkPermission.isGranted();
-      if (!mounted) return;
-    }
-    setState(() {
-      _supported = supported;
-      _granted = granted;
-    });
-  }
-
-  void _handlePermissionResult(bool granted) {
-    if (!mounted) return;
-    setState(() => _granted = granted);
-    if (!granted) unawaited(_showSettingsHint());
-  }
-
-  Future<void> _showSettingsHint() async {
-    final goSettings = await globalState.showMessage(
-      title: appLocalizations.tip,
-      message: TextSpan(text: appLocalizations.localNetworkPermissionDesc),
-      confirmText: appLocalizations.localNetworkPermissionOpenSettings,
-      cancelText: appLocalizations.cancel,
-    );
-    if (goSettings == true) await app.openAppSettings();
-  }
-
-  // 单向语义：该行只在未授权时显示，关闭方向不可达；撤销只能在系统设置里做。
-  // 开关不做乐观更新，由权限查询结果驱动。
-  Future<void> _onChanged(bool value) async {
-    if (!value || _requesting) return;
-    _requesting = true;
-    try {
-      // 未授权 -> 发起申请；失败（含永久拒绝）时引导用户去系统设置。
-      final requested = await LocalNetworkPermission.request(force: true);
-      if (!requested && mounted) await _showSettingsHint();
-    } finally {
-      _requesting = false;
-    }
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    // 仅"已确认支持且未授权"才渲染；状态未知或已授权时整行不出现。
-    if (_supported != true || _granted == true) return const SizedBox.shrink();
-    return ListItem.switchItem(
-      title: Text(appLocalizations.localNetworkPermission),
-      subtitle: Text(appLocalizations.localNetworkPermissionDesc),
-      // 该行只在未授权时渲染，开关恒为 OFF，点击即发起申请。
-      delegate: SwitchDelegate(value: false, onChanged: _onChanged),
-    );
-  }
-}
-
 class ApplicationSettingView extends ConsumerWidget {
   const ApplicationSettingView({super.key});
 
@@ -745,11 +641,7 @@ class ApplicationSettingView extends ConsumerWidget {
       AutoLaunchItem(),
       if (system.isDesktop) ...[SilentLaunchItem()],
       AutoRunItem(),
-      if (system.isAndroid) ...[
-        HiddenItem(),
-        // Android 16+ 局域网访问权限的自救入口（被拒绝后系统不再弹窗）。
-        const LocalNetworkPermissionItem(),
-      ],
+      if (system.isAndroid) ...[HiddenItem()],
       if (system.isDesktop) ...[
         if (system.isWindows || system.isLinux) const AlwaysShowTitleBarItem(),
       ],

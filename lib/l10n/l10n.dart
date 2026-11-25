@@ -3260,56 +3260,6 @@ class AppLocalizations {
     );
   }
 
-  /// `Local network access`
-  String get localNetworkPermission {
-    return Intl.message(
-      'Local network access',
-      name: 'localNetworkPermission',
-      desc: '',
-      args: [],
-    );
-  }
-
-  /// `Required on Android 16+ to reach devices on your local network (for example a LAN subscription URL). Without it, LAN requests keep timing out.`
-  String get localNetworkPermissionDesc {
-    return Intl.message(
-      'Required on Android 16+ to reach devices on your local network (for example a LAN subscription URL). Without it, LAN requests keep timing out.',
-      name: 'localNetworkPermissionDesc',
-      desc: '',
-      args: [],
-    );
-  }
-
-  /// `Granted`
-  String get localNetworkPermissionGranted {
-    return Intl.message(
-      'Granted',
-      name: 'localNetworkPermissionGranted',
-      desc: '',
-      args: [],
-    );
-  }
-
-  /// `Not granted`
-  String get localNetworkPermissionDenied {
-    return Intl.message(
-      'Not granted',
-      name: 'localNetworkPermissionDenied',
-      desc: '',
-      args: [],
-    );
-  }
-
-  /// `Open settings`
-  String get localNetworkPermissionOpenSettings {
-    return Intl.message(
-      'Open settings',
-      name: 'localNetworkPermissionOpenSettings',
-      desc: '',
-      args: [],
-    );
-  }
-
   /// `Restore data from file`
   String get localRecoveryDesc {
     return Intl.message(
