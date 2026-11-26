@@ -79,12 +79,19 @@ class AppController {
   AppController(this.context, WidgetRef ref) : _ref = ref;
 
   DateTime _lastModeChangeTime = DateTime.fromMillisecondsSinceEpoch(0);
+  Mode? _appliedMode;
+
+  bool get _closeConnectionsOnSwitch => system.isAndroid
+      ? _ref.read(vpnSettingProvider).quickResponse
+      : _ref.read(appSettingProvider).closeConnections;
 
   void scheduleIdleGc({Duration delay = const Duration(seconds: 2)}) {
     _idleGcTimer?.cancel();
     _idleGcTimer = Timer(delay, () {
       _idleGcTimer = null;
-      unawaited(clashCore.requestGc(forceFreeOSMemory: true));
+      unawaited(
+        clashCore.requestGc(forceFreeOSMemory: true, purge: system.isAndroid),
+      );
     });
   }
 
@@ -354,9 +361,7 @@ class AppController {
           _ref.read(groupsProvider.notifier).value = groups;
         }
 
-        await Future.delayed(const Duration(seconds: 2));
-        if (version != _backgroundLoadVersion) return;
-        await clashCore.requestGc(forceFreeOSMemory: true);
+        scheduleIdleGc();
       } catch (e) {
         commonPrint.warn('Background load failed: $e');
       }
@@ -425,6 +430,7 @@ class AppController {
       }
     }
     if (message.isNotEmpty) throw message;
+    _appliedMode = realPatchConfig.mode;
     _applyGlobalSelection(result.global);
     _loadedProfileId = currentProfile.id;
     if (system.isDesktop) {
@@ -811,6 +817,7 @@ class AppController {
             bundle: latestBundle.copyWith(
               report: generated.bundle?.report ?? latestBundle.report,
               failures: generated.bundle?.failures ?? const {},
+              scriptKey: generated.bundle?.scriptKey,
             ),
           ),
         );
@@ -837,14 +844,13 @@ class AppController {
   }) async {
     final profile = _ref.read(profilesProvider).getProfile(id);
     if (profile == null || profile.bundle == null) return;
-    if ((scriptId == null) != profile.isManaged) {
+    if (scriptId != profile.scriptId) {
       await generateBundle(
         id,
         update: (profile) => profile.copyWith(scriptId: scriptId),
       );
       return;
     }
-    setProfile(profile.copyWith(scriptId: scriptId));
     if (regenerate) await generateBundle(id);
   }
 
@@ -882,6 +888,21 @@ class AppController {
       if (scripts.findScript(profile.scriptId) != null) continue;
       unawaited(safeRun(() => updateBundleScript(profile.id, null)));
     }
+    syncScriptBundles();
+  }
+
+  String _bundleScriptKey(Script script) =>
+      '${script.id}:${script.digest}:${json.encode(script.customOptions ?? const <String, bool>{})}';
+
+  void syncScriptBundles() {
+    final scripts = _ref.read(scriptStateProvider);
+    scheduleBundles([
+      for (final profile in _ref.read(profilesProvider))
+        if (profile.bundle case final bundle? when !profile.isManaged)
+          if (scripts.findScript(profile.scriptId) case final script?
+              when bundle.scriptKey != _bundleScriptKey(script))
+            profile.id,
+    ]);
   }
 
   void updateManagedSetting(ManagedProps Function(ManagedProps state) builder) {
@@ -1117,7 +1138,7 @@ class AppController {
             _ref.read(managedSettingProvider),
             nodeNames: _ref.read(nodesProvider).regionNodeNames,
           )
-        : null;
+        : _ref.read(scriptStateProvider).findScript(profile.scriptId);
     final inputs = <({String prefix, String path})>[];
     final failures = <String, String>{};
     final files = <File>[];
@@ -1131,7 +1152,8 @@ class AppController {
               : await globalState.writeScriptedConfig(
                   target,
                   script,
-                  managed: true,
+                  managed: profile.isManaged,
+                  expandProviders: true,
                   refresh: refresh,
                 );
           files.add(File(path));
@@ -1162,7 +1184,13 @@ class AppController {
           profile,
           _ref.read(profilesProvider),
         ),
-        bundle: profile.bundle?.copyWith(report: report, failures: failures),
+        bundle: profile.bundle?.copyWith(
+          report: report,
+          failures: failures,
+          scriptKey: script == null || profile.isManaged
+              ? null
+              : _bundleScriptKey(script),
+        ),
       );
     } finally {
       for (final file in files) {
@@ -1287,6 +1315,14 @@ class AppController {
       updateParams.copyWith.tun(enable: realTunEnable),
     );
     if (message.isNotEmpty) throw message;
+    final previousMode = _appliedMode;
+    _appliedMode = updateParams.mode;
+    if (previousMode != null &&
+        previousMode != updateParams.mode &&
+        globalState.isStart &&
+        _closeConnectionsOnSwitch) {
+      await clashCore.closeConnections();
+    }
 
     if (system.isDesktop) {
       final prefs = await preferences.sharedPreferencesCompleter.future;
@@ -1334,12 +1370,6 @@ class AppController {
 
   Future<void> _applyProfile() async {
     _invalidateCoreReads();
-    unawaited(
-      clashCore.requestGc().then<void>(
-        (_) {},
-        onError: (Object e) => commonPrint.debug('requestGc ignored: $e'),
-      ),
-    );
     final configured = await _setupCoreConfig();
     if (!configured) return;
     _ref.read(delayDataSourceProvider.notifier).clear();
@@ -1671,10 +1701,7 @@ class AppController {
     await clashCore.changeProxy(
       ChangeProxyParams(groupName: groupName, proxyName: proxyName),
     );
-    final closeConnections = system.isAndroid
-        ? _ref.read(vpnSettingProvider).quickResponse
-        : _ref.read(appSettingProvider).closeConnections;
-    if (closeConnections) {
+    if (_closeConnectionsOnSwitch) {
       await clashCore.closeGroupConnections(groupName);
     }
     addCheckIp();
@@ -2197,6 +2224,7 @@ class AppController {
 
     await updateGroups();
     unawaited(checkManagedScriptVersionUpgrade());
+    syncScriptBundles();
 
     unawaited(
       autoLaunch?.updateStatus(_ref.read(appSettingProvider).autoLaunch),

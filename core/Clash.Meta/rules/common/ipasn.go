@@ -28,19 +28,11 @@ func (a *ASN) Match(metadata *C.Metadata, helper C.RuleMatchHelper) (bool, strin
 		return false, ""
 	}
 
-	asn, aso := mmdb.ASNInstance().LookupASN(ip.AsSlice())
-	// preventing smart duplicate lookup
-	var asnInfo string
-	if asn == "" {
-		asnInfo = "unknown"
-	} else {
-		asnInfo = asn + " " + aso
-	}
-
+	asn, aso := mmdb.LookupASN(ip.AsSlice())
 	if a.isSourceIP {
-		metadata.SrcIPASN = asnInfo
+		metadata.SrcIPASN = asn + " " + aso
 	} else {
-		metadata.DstIPASN = asnInfo
+		metadata.DstIPASN = asn + " " + aso
 	}
 
 	return a.asn == asn, a.adapter
